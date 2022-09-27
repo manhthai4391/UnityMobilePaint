@@ -1,10 +1,10 @@
 // Optimized Mobile Painter - Unitycoder.com
 
 using UnityEngine;
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.EventSystems;
-using UnityEngine.UI;
+using System.Threading.Tasks;
+using System.IO;
 
 namespace unitycoder_MobilePaint
 {
@@ -28,6 +28,13 @@ namespace unitycoder_MobilePaint
     [RequireComponent(typeof(MeshRenderer))]
     public class MobilePaint : MonoBehaviour
     {
+        // for checking if UI element is clicked, then dont paint under it
+        [SerializeField]
+        EventSystem eventSystem;
+
+        [SerializeField]
+        private Camera mainCam; // main camera reference
+
         [Header("Mouse or Touch")]
         public bool enableTouch = false;
 
@@ -44,8 +51,6 @@ namespace unitycoder_MobilePaint
 
         //	*** Default settings ***
         public Color32 paintColor = new Color32(255, 0, 0, 255);
-
-
 
         public int brushSize = 24; // default brush size
         public int brushSizeMin = 1; // default min brush size
@@ -157,11 +162,11 @@ namespace unitycoder_MobilePaint
         private const float BASE_HEIGHT = 480;
 
         //	*** private variables, no need to touch ***
-        private byte[] pixels; // byte array for texture painting, this is the image that we paint into.
+        protected byte[] pixels; // byte array for texture painting, this is the image that we paint into.
         private byte[] maskPixels; // byte array for mask texture
         private byte[] clearPixels; // byte array for clearing texture
 
-        private Texture2D drawingTexture; // texture that we paint into (it gets updated from pixels[] array when painted)
+        protected Texture2D drawingTexture; // texture that we paint into (it gets updated from pixels[] array when painted)
 
         [Header("Overrides")]
         public float resolutionScaler = 1.0f; // 1 means screen resolution, 0.5f means half the screen resolution
@@ -173,7 +178,6 @@ namespace unitycoder_MobilePaint
         private int texHeight;
         private Touch touch; // touch reference
         private bool wasTouching = false; // in previous frame we had touch
-        private Camera cam; // main camera reference
         private Renderer myRenderer;
 
         private RaycastHit hit;
@@ -193,7 +197,9 @@ namespace unitycoder_MobilePaint
         [Header("Misc")]
         public bool undoEnabled = false;
         private List<byte[]> undoPixels; // undo buffer(s)
-        private int maxUndoBuffers = 10; // how many undo buffers are kept in memory
+        [Tooltip("how many undo buffers are kept in memory")]
+        [SerializeField]
+        private int maxUndoBuffers = 3; // how many undo buffers are kept in memory
         public GameObject userInterface;
         public bool hideUIWhilePainting = false;
         private bool isUIVisible = true;
@@ -201,38 +207,28 @@ namespace unitycoder_MobilePaint
         // Debug mode, outputs debug info when used
         public bool debugMode = false;
 
-        // for checking if UI element is clicked, then dont paint under it
-        EventSystem eventSystem;
-
         // zoom pan
         private bool isZoomingOrPanning = false;
 
         void Awake()
         {
             // cache components
-            cam = Camera.main;
             myRenderer = GetComponent<Renderer>();
 
 
-            GameObject go = GameObject.Find("EventSystem");
-            if (go == null)
+            if (eventSystem == null)
             {
                 Debug.LogError("GameObject EventSystem is missing from scene, will have problems with the UI", gameObject);
-            }
-            else {
-                eventSystem = go.GetComponent<EventSystem>();
             }
 
             StartupValidation();
             InitializeEverything();
         }
 
-
-
         // all startup validations will be moved here
         void StartupValidation()
         {
-            if (cam == null) Debug.LogError("MainCamera not founded, you must have 1 camera active & tagged as MainCamera", gameObject);
+            if (mainCam == null) Debug.LogError("MainCamera not founded, you must have 1 camera active & tagged as MainCamera", gameObject);
 
             if (userInterface == null)
             {
@@ -417,7 +413,7 @@ namespace unitycoder_MobilePaint
             if (myRenderer.material.GetTexture(targetTexture) == null && !usingClearingImage) // temporary fix by adding && !usingClearingImage
             {
                 // create new texture
-                if (drawingTexture != null) Texture2D.DestroyImmediate(drawingTexture, true); // cleanup old texture
+                if (drawingTexture != null) DestroyImmediate(drawingTexture, true); // cleanup old texture
                 drawingTexture = new Texture2D(texWidth, texHeight, TextureFormat.RGBA32, false);
                 myRenderer.material.SetTexture(targetTexture, drawingTexture);
 
@@ -502,7 +498,7 @@ namespace unitycoder_MobilePaint
         void MousePaint()
         {
             // TEST: Undo key for desktop
-            if (undoEnabled && Input.GetKeyDown("u")) DoUndo();
+            if (undoEnabled && Input.GetKeyDown(KeyCode.U)) DoUndo();
 
             // mouse is over UI element? then dont paint
             if (eventSystem.IsPointerOverGameObject()) return;
@@ -519,7 +515,7 @@ namespace unitycoder_MobilePaint
                 // if lock area is used, we need to take full area before painting starts
                 if (useLockArea)
                 {
-                    if (!Physics.Raycast(cam.ScreenPointToRay(Input.mousePosition), out hit, Mathf.Infinity, paintLayerMask)) return;
+                    if (!Physics.Raycast(mainCam.ScreenPointToRay(Input.mousePosition), out hit, Mathf.Infinity, paintLayerMask)) return;
                     CreateAreaLockMask((int)(hit.textureCoord.x * texWidth), (int)(hit.textureCoord.y * texHeight));
                 }
             }
@@ -528,7 +524,7 @@ namespace unitycoder_MobilePaint
             if (Input.GetMouseButton(0))
             {
                 // Only if we hit something, then we continue
-                if (!Physics.Raycast(cam.ScreenPointToRay(Input.mousePosition), out hit, Mathf.Infinity, paintLayerMask)) { wentOutside = true; return; }
+                if (!Physics.Raycast(mainCam.ScreenPointToRay(Input.mousePosition), out hit, Mathf.Infinity, paintLayerMask)) { wentOutside = true; return; }
 
                 pixelUVOld = pixelUV; // take previous value, so can compare them
                 pixelUV = hit.textureCoord;
@@ -592,7 +588,7 @@ namespace unitycoder_MobilePaint
             if (Input.GetMouseButtonDown(0))
             {
                 // take this position as start position
-                if (!Physics.Raycast(cam.ScreenPointToRay(Input.mousePosition), out hit, Mathf.Infinity, paintLayerMask)) return;
+                if (!Physics.Raycast(mainCam.ScreenPointToRay(Input.mousePosition), out hit, Mathf.Infinity, paintLayerMask)) return;
 
                 pixelUVOld = pixelUV;
             }
@@ -671,6 +667,8 @@ namespace unitycoder_MobilePaint
                 }
 
                 if (hideUIWhilePainting && !isUIVisible) ShowUI(); // show UI since we stopped drawing
+
+
             }
 
         }
@@ -709,7 +707,7 @@ namespace unitycoder_MobilePaint
 
                     if (useLockArea)
                     {
-                        if (!Physics.Raycast(cam.ScreenPointToRay(touch.position), out hit, Mathf.Infinity, paintLayerMask)) { wentOutside = true; return; }
+                        if (!Physics.Raycast(mainCam.ScreenPointToRay(touch.position), out hit, Mathf.Infinity, paintLayerMask)) { wentOutside = true; return; }
 
                         /*
 						pixelUV = hit.textureCoord;
@@ -731,7 +729,7 @@ namespace unitycoder_MobilePaint
                 {
 
                     // do raycast on touch position
-                    if (Physics.Raycast(cam.ScreenPointToRay(touch.position), out hit, Mathf.Infinity, paintLayerMask))
+                    if (Physics.Raycast(mainCam.ScreenPointToRay(touch.position), out hit, Mathf.Infinity, paintLayerMask))
                     {
                         // take previous value, so can compare them
                         pixelUVOlds[touch.fingerId] = pixelUVs[touch.fingerId];
@@ -893,7 +891,6 @@ namespace unitycoder_MobilePaint
 
         void CreateAreaLockMask(int x, int y)
         {
-
             initialX = x;
             initialY = y;
 
@@ -1912,130 +1909,133 @@ namespace unitycoder_MobilePaint
         } // LockAreaFillWithThresholdMaskOnly
 
 
-        void LockAreaFillWithThresholdMaskOnlyGetArea(int x, int y, bool getArea)
+        async void LockAreaFillWithThresholdMaskOnlyGetArea(int x, int y, bool getArea)
         {
-            // temporary fix for IOS notification center pulldown crash
-            if (x >= texWidth) x = texWidth - 1;
-            if (y >= texHeight) y = texHeight - 1;
-
             int fullArea = 0;
             int alreadyFilled = 0;
 
-            // get canvas color from this point
-            byte hitColorR = maskPixels[(texWidth * y + x) * 4 + 0];
-            byte hitColorG = maskPixels[(texWidth * y + x) * 4 + 1];
-            byte hitColorB = maskPixels[(texWidth * y + x) * 4 + 2];
-            byte hitColorA = maskPixels[(texWidth * y + x) * 4 + 3];
-
-            if (!canDrawOnBlack)
+            await Task.Run(() =>
             {
-                if (hitColorR == 0 && hitColorG == 0 && hitColorB == 0 && hitColorA != 0) return;
-            }
+                // temporary fix for IOS notification center pulldown crash
+                if (x >= texWidth) x = texWidth - 1;
+                if (y >= texHeight) y = texHeight - 1;
 
-            Queue<int> fillPointX = new Queue<int>();
-            Queue<int> fillPointY = new Queue<int>();
-            fillPointX.Enqueue(x);
-            fillPointY.Enqueue(y);
+                // get canvas color from this point
+                byte hitColorR = maskPixels[(texWidth * y + x) * 4 + 0];
+                byte hitColorG = maskPixels[(texWidth * y + x) * 4 + 1];
+                byte hitColorB = maskPixels[(texWidth * y + x) * 4 + 2];
+                byte hitColorA = maskPixels[(texWidth * y + x) * 4 + 3];
 
-            int ptsx, ptsy;
-            int pixel = 0;
-
-            lockMaskPixels = new byte[texWidth * texHeight * 4];
-
-            while (fillPointX.Count > 0)
-            {
-
-                ptsx = fillPointX.Dequeue();
-                ptsy = fillPointY.Dequeue();
-
-                if (ptsy - 1 > -1)
+                if (!canDrawOnBlack)
                 {
-                    pixel = (texWidth * (ptsy - 1) + ptsx) * 4; // down
-
-                    if (lockMaskPixels[pixel] == 0 // this pixel is not used yet
-                        && (CompareThreshold(maskPixels[pixel + 0], hitColorR))
-                        && (CompareThreshold(maskPixels[pixel + 1], hitColorG))
-                        && (CompareThreshold(maskPixels[pixel + 2], hitColorB))
-                        && (CompareThreshold(maskPixels[pixel + 3], hitColorA)))
-                    {
-                        fillPointX.Enqueue(ptsx);
-                        fillPointY.Enqueue(ptsy - 1);
-                        lockMaskPixels[pixel] = 1;
-                        fullArea++;
-
-                        if (IsSameColor(paintColor, pixels[pixel + 0], pixels[pixel + 1], pixels[pixel + 2]))
-                        {
-                            alreadyFilled++;
-                        }
-
-                    }
+                    if (hitColorR == 0 && hitColorG == 0 && hitColorB == 0 && hitColorA != 0) return;
                 }
 
-                if (ptsx + 1 < texWidth)
-                {
-                    pixel = (texWidth * ptsy + ptsx + 1) * 4; // right
-                    if (lockMaskPixels[pixel] == 0
-                        && (CompareThreshold(maskPixels[pixel + 0], hitColorR))
-                        && (CompareThreshold(maskPixels[pixel + 1], hitColorG))
-                        && (CompareThreshold(maskPixels[pixel + 2], hitColorB))
-                        && (CompareThreshold(maskPixels[pixel + 3], hitColorA)))
-                    {
-                        fillPointX.Enqueue(ptsx + 1);
-                        fillPointY.Enqueue(ptsy);
-                        lockMaskPixels[pixel] = 1;
-                        fullArea++;
-                        if (IsSameColor(paintColor, pixels[pixel + 0], pixels[pixel + 1], pixels[pixel + 2]))
-                        {
-                            alreadyFilled++;
-                        }
+                Queue<int> fillPointX = new Queue<int>();
+                Queue<int> fillPointY = new Queue<int>();
+                fillPointX.Enqueue(x);
+                fillPointY.Enqueue(y);
 
-                    }
-                }
+                int ptsx, ptsy;
+                int pixel = 0;
 
-                if (ptsx - 1 > -1)
+                lockMaskPixels = new byte[texWidth * texHeight * 4];
+
+                while (fillPointX.Count > 0)
                 {
-                    pixel = (texWidth * ptsy + ptsx - 1) * 4; // left
-                    if (lockMaskPixels[pixel] == 0
-                        && (CompareThreshold(maskPixels[pixel + 0], hitColorR))
-                        && (CompareThreshold(maskPixels[pixel + 1], hitColorG))
-                        && (CompareThreshold(maskPixels[pixel + 2], hitColorB))
-                        && (CompareThreshold(maskPixels[pixel + 3], hitColorA)))
+                    ptsx = fillPointX.Dequeue();
+                    ptsy = fillPointY.Dequeue();
+
+                    if (ptsy - 1 > -1)
                     {
-                        fillPointX.Enqueue(ptsx - 1);
-                        fillPointY.Enqueue(ptsy);
-                        lockMaskPixels[pixel] = 1;
-                        fullArea++;
-                        if (IsSameColor(paintColor, pixels[pixel + 0], pixels[pixel + 1], pixels[pixel + 2]))
+                        pixel = (texWidth * (ptsy - 1) + ptsx) * 4; // down
+
+                        if (lockMaskPixels[pixel] == 0 // this pixel is not used yet
+                            && (CompareThreshold(maskPixels[pixel + 0], hitColorR))
+                            && (CompareThreshold(maskPixels[pixel + 1], hitColorG))
+                            && (CompareThreshold(maskPixels[pixel + 2], hitColorB))
+                            && (CompareThreshold(maskPixels[pixel + 3], hitColorA)))
                         {
-                            alreadyFilled++;
+                            fillPointX.Enqueue(ptsx);
+                            fillPointY.Enqueue(ptsy - 1);
+                            lockMaskPixels[pixel] = 1;
+                            fullArea++;
+
+                            if (IsSameColor(paintColor, pixels[pixel + 0], pixels[pixel + 1], pixels[pixel + 2]))
+                            {
+                                alreadyFilled++;
+                            }
+
                         }
                     }
-                }
 
-                if (ptsy + 1 < texHeight)
-                {
-                    pixel = (texWidth * (ptsy + 1) + ptsx) * 4; // up
-                    if (lockMaskPixels[pixel] == 0
-                        && (CompareThreshold(maskPixels[pixel + 0], hitColorR))
-                        && (CompareThreshold(maskPixels[pixel + 1], hitColorG))
-                        && (CompareThreshold(maskPixels[pixel + 2], hitColorB))
-                        && (CompareThreshold(maskPixels[pixel + 3], hitColorA)))
+                    if (ptsx + 1 < texWidth)
                     {
-                        fillPointX.Enqueue(ptsx);
-                        fillPointY.Enqueue(ptsy + 1);
-                        lockMaskPixels[pixel] = 1;
-                        fullArea++;
-                        if (IsSameColor(paintColor, pixels[pixel + 0], pixels[pixel + 1], pixels[pixel + 2]))
+                        pixel = (texWidth * ptsy + ptsx + 1) * 4; // right
+                        if (lockMaskPixels[pixel] == 0
+                            && (CompareThreshold(maskPixels[pixel + 0], hitColorR))
+                            && (CompareThreshold(maskPixels[pixel + 1], hitColorG))
+                            && (CompareThreshold(maskPixels[pixel + 2], hitColorB))
+                            && (CompareThreshold(maskPixels[pixel + 3], hitColorA)))
                         {
-                            alreadyFilled++;
+                            fillPointX.Enqueue(ptsx + 1);
+                            fillPointY.Enqueue(ptsy);
+                            lockMaskPixels[pixel] = 1;
+                            fullArea++;
+                            if (IsSameColor(paintColor, pixels[pixel + 0], pixels[pixel + 1], pixels[pixel + 2]))
+                            {
+                                alreadyFilled++;
+                            }
+
                         }
                     }
-                }
-            } // while
 
+                    if (ptsx - 1 > -1)
+                    {
+                        pixel = (texWidth * ptsy + ptsx - 1) * 4; // left
+                        if (lockMaskPixels[pixel] == 0
+                            && (CompareThreshold(maskPixels[pixel + 0], hitColorR))
+                            && (CompareThreshold(maskPixels[pixel + 1], hitColorG))
+                            && (CompareThreshold(maskPixels[pixel + 2], hitColorB))
+                            && (CompareThreshold(maskPixels[pixel + 3], hitColorA)))
+                        {
+                            fillPointX.Enqueue(ptsx - 1);
+                            fillPointY.Enqueue(ptsy);
+                            lockMaskPixels[pixel] = 1;
+                            fullArea++;
+                            if (IsSameColor(paintColor, pixels[pixel + 0], pixels[pixel + 1], pixels[pixel + 2]))
+                            {
+                                alreadyFilled++;
+                            }
+                        }
+                    }
+
+                    if (ptsy + 1 < texHeight)
+                    {
+                        pixel = (texWidth * (ptsy + 1) + ptsx) * 4; // up
+                        if (lockMaskPixels[pixel] == 0
+                            && (CompareThreshold(maskPixels[pixel + 0], hitColorR))
+                            && (CompareThreshold(maskPixels[pixel + 1], hitColorG))
+                            && (CompareThreshold(maskPixels[pixel + 2], hitColorB))
+                            && (CompareThreshold(maskPixels[pixel + 3], hitColorA)))
+                        {
+                            fillPointX.Enqueue(ptsx);
+                            fillPointY.Enqueue(ptsy + 1);
+                            lockMaskPixels[pixel] = 1;
+                            fullArea++;
+                            if (IsSameColor(paintColor, pixels[pixel + 0], pixels[pixel + 1], pixels[pixel + 2]))
+                            {
+                                alreadyFilled++;
+                            }
+                        }
+                    }
+                } // while
+            });
+
+            Debug.Log("Async completed");
             if (getArea)
             {
-                if (AreaPaintedEvent != null) AreaPaintedEvent(fullArea, alreadyFilled, alreadyFilled / (float)fullArea * 100f, PixelToWorld(x, y));
+                AreaPaintedEvent?.Invoke(fullArea, alreadyFilled, alreadyFilled / (float)fullArea * 100f, PixelToWorld(x, y));
             }
 
         } // void
@@ -2254,13 +2254,13 @@ namespace unitycoder_MobilePaint
                 e2 = 2 * err;
                 if (e2 > -dy)
                 {
-                    err = err - dy;
-                    startX = startX + sx;
+                    err -= dy;
+                    startX += sx;
                 }
                 else if (e2 < dx)
                 {
-                    err = err + dx;
-                    startY = startY + sy;
+                    err += dx;
+                    startY += sy;
                 }
             }
         } // drawline
@@ -2304,13 +2304,13 @@ namespace unitycoder_MobilePaint
                 e2 = 2 * err;
                 if (e2 > -dy)
                 {
-                    err = err - dy;
-                    x0 = x0 + sx;
+                    err -= dy;
+                    x0 += sx;
                 }
                 else if (e2 < dx)
                 {
-                    err = err + dx;
-                    y0 = y0 + sy;
+                    err += dx;
+                    y0 += sy;
                 }
             }
         }
@@ -2350,13 +2350,13 @@ namespace unitycoder_MobilePaint
                 e2 = 2 * err;
                 if (e2 > -dy)
                 {
-                    err = err - dy;
-                    x0 = x0 + sx;
+                    err -= dy;
+                    x0 += sx;
                 }
                 else if (e2 < dx)
                 {
-                    err = err + dx;
-                    y0 = y0 + sy;
+                    err += dx;
+                    y0 += sy;
                 }
             }
         }
@@ -2395,13 +2395,13 @@ namespace unitycoder_MobilePaint
                 e2 = 2 * err;
                 if (e2 > -dy)
                 {
-                    err = err - dy;
-                    x0 = x0 + sx;
+                    err -= dy;
+                    x0 += sx;
                 }
                 else if (e2 < dx)
                 {
-                    err = err + dx;
-                    y0 = y0 + sy;
+                    err += dx;
+                    y0 += sy;
                 }
             }
         }
@@ -2440,13 +2440,13 @@ namespace unitycoder_MobilePaint
                 e2 = 2 * err;
                 if (e2 > -dy)
                 {
-                    err = err - dy;
-                    x0 = x0 + sx;
+                    err -= dy;
+                    x0 += sx;
                 }
                 else if (e2 < dx)
                 {
-                    err = err + dx;
-                    y0 = y0 + sy;
+                    err += dx;
+                    y0 += sy;
                 }
             }
         }
@@ -2592,7 +2592,6 @@ namespace unitycoder_MobilePaint
             {
                 for (int x = 0; x < texWidth; x++)
                 {
-
                     if (smoothenMaskEdges)
                     {
                         c = new Color(0, 0, 0, 0);
@@ -2684,7 +2683,7 @@ namespace unitycoder_MobilePaint
                 for (int i = 0; i < referenceCorners.Length; i++)
                 {
                     referenceCorners[i] = referenceCorners[i];
-                    referenceCorners[i].z = -cam.transform.position.z;
+                    referenceCorners[i].z = -mainCam.transform.position.z;
                 }
                 go_Mesh.vertices = referenceCorners;
 
@@ -2692,10 +2691,10 @@ namespace unitycoder_MobilePaint
             else { // just use full screen quad for main camera
 
 
-                referenceCorners[0] = new Vector3(0, canvasSizeAdjust.y, cam.nearClipPlane); // bottom left
-                referenceCorners[1] = new Vector3(0, cam.pixelHeight + canvasSizeAdjust.y, cam.nearClipPlane); // top left
-                referenceCorners[2] = new Vector3(cam.pixelWidth + canvasSizeAdjust.x, cam.pixelHeight + canvasSizeAdjust.y, cam.nearClipPlane); // top right
-                referenceCorners[3] = new Vector3(cam.pixelWidth + canvasSizeAdjust.x, canvasSizeAdjust.y, cam.nearClipPlane); // bottom right
+                referenceCorners[0] = new Vector3(0, canvasSizeAdjust.y, mainCam.nearClipPlane); // bottom left
+                referenceCorners[1] = new Vector3(0, mainCam.pixelHeight + canvasSizeAdjust.y, mainCam.nearClipPlane); // top left
+                referenceCorners[2] = new Vector3(mainCam.pixelWidth + canvasSizeAdjust.x, mainCam.pixelHeight + canvasSizeAdjust.y, mainCam.nearClipPlane); // top right
+                referenceCorners[3] = new Vector3(mainCam.pixelWidth + canvasSizeAdjust.x, canvasSizeAdjust.y, mainCam.nearClipPlane); // bottom right
             }
 
             // move to screen
@@ -2704,8 +2703,8 @@ namespace unitycoder_MobilePaint
 
             for (int i = 0; i < referenceCorners.Length; i++)
             {
-                referenceCorners[i].z = -cam.transform.position.z + nearClipOffset;
-                referenceCorners[i] = cam.ScreenToWorldPoint(referenceCorners[i]);
+                referenceCorners[i].z = -mainCam.transform.position.z + nearClipOffset;
+                referenceCorners[i] = mainCam.ScreenToWorldPoint(referenceCorners[i]);
             }
 
 
@@ -2793,11 +2792,11 @@ namespace unitycoder_MobilePaint
         {
             HideUI();
 
-            cam.Render();
+            mainCam.Render();
             Mesh go_Mesh = GetComponent<MeshFilter>().mesh;
-            var topLeft = cam.WorldToScreenPoint(go_Mesh.vertices[0]);
-            var topRight = cam.WorldToScreenPoint(go_Mesh.vertices[3]);
-            var bottomRight = cam.WorldToScreenPoint(go_Mesh.vertices[2]);
+            var topLeft = mainCam.WorldToScreenPoint(go_Mesh.vertices[0]);
+            var topRight = mainCam.WorldToScreenPoint(go_Mesh.vertices[3]);
+            var bottomRight = mainCam.WorldToScreenPoint(go_Mesh.vertices[2]);
             var image = new Texture2D((int)(bottomRight.x - topLeft.x), (int)(bottomRight.y - topRight.y), TextureFormat.ARGB32, false);
             image.ReadPixels(new Rect(topLeft.x, topLeft.y, bottomRight.x, bottomRight.y), 0, 0);
             image.Apply(false);
@@ -2831,7 +2830,6 @@ namespace unitycoder_MobilePaint
         public void SetPaintColor(Color32 newColor)
         {
             paintColor = newColor;
-
             SetBrushAlphaStrength(brushAlphaStrength);
             alphaLerpVal = paintColor.a / brushAlphaStrengthVal; // precalc
             UpdateLineModePreviewObjects();
@@ -2847,20 +2845,22 @@ namespace unitycoder_MobilePaint
         {
             if (lineRenderer)
             {
-                lineRenderer.SetColors(paintColor, paintColor);
-                lineRenderer.SetWidth(brushSize*2f / resolutionScaler, brushSize*2f / resolutionScaler);
+                lineRenderer.startColor = paintColor;
+                lineRenderer.endColor = paintColor;
+                lineRenderer.startWidth = brushSize * 2f / resolutionScaler;
+                lineRenderer.endWidth = brushSize * 2f / resolutionScaler;
             }
 
             if (previewLineCircleEnd)
             {
                 previewLineCircleEnd.GetComponent<SpriteRenderer>().color = paintColor;
-                previewLineCircleEnd.transform.localScale = Vector3.one * brushSize * 0.8f / resolutionScaler;
+                previewLineCircleEnd.transform.localScale = 0.8f * brushSize * Vector3.one / resolutionScaler;
             }
 
             if (previewLineCircleStart)
             {
                 previewLineCircleStart.GetComponent<SpriteRenderer>().color = paintColor;
-                previewLineCircleStart.transform.localScale = Vector3.one * brushSize * 0.8f / resolutionScaler;
+                previewLineCircleStart.transform.localScale = 0.8f * brushSize * Vector3.one / resolutionScaler;
             }
         }
 
@@ -2873,8 +2873,9 @@ namespace unitycoder_MobilePaint
         // assigns new mask layer image
         public void SetMaskImage(Texture2D newTexture)
         {
+            myRenderer = GetComponent<Renderer>();
             // Check if we have correct material to use mask image (layer)
-            if (myRenderer.material.name.StartsWith("CanvasWithAlpha") || GetComponent<Renderer>().material.name.StartsWith("CanvasDefault"))
+            if (myRenderer.material.name.StartsWith("CanvasWithAlpha") || myRenderer.material.name.StartsWith("CanvasDefault"))
             {
                 // FIXME: this is bit annoying to compare material names..
                 Debug.LogWarning("CanvasWithAlpha and CanvasDefault materials do not support using MaskImage (layer). Disabling 'useMaskImage'");
@@ -2910,7 +2911,7 @@ namespace unitycoder_MobilePaint
         public void SetPanZoomMode(bool state)
         {
             isZoomingOrPanning = state;
-            this.enabled = isZoomingOrPanning ? false : true; // Disable Update() loop from this script, if zooming or panning
+            this.enabled = !isZoomingOrPanning; // Disable Update() loop from this script, if zooming or panning
         }
 
 
